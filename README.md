@@ -83,11 +83,3 @@ javac Main.java
 java Main
 ```
 
-## Assignment Objectives Covered
-
-* Implemented `BankAccount` with deposit, withdrawal, transfer, and balance inquiry methods.
-* Executed all six customer transactions concurrently using separate threads.
-* Demonstrated a race condition first without synchronization.
-* Resolved concurrency issues using both `synchronized` blocks and `ReentrantLock`.
-* Implemented thread coordination (`Condition` with `awaitNanos` and `signalAll`) for waiting withdrawals.
-* Verified that accounts cannot be overdrawn, no money is lost during concurrent execution, all transactions are recorded, and final balances match the transaction ledger.
