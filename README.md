@@ -67,27 +67,3 @@ Running `Main` executes four test scenarios in order:
      * `Instant-50k` tries a standard `withdraw(50,000)` and is rejected immediately because funds are insufficient.
      * `Waiter-25k` calls `withdrawWhenFunded(25,000, 3000)` and waits on `fundsAvailable.awaitNanos()`. After `300ms`, `Depositor` deposits `KSh 20,000` and calls `signalAll()`, waking `Waiter-25k` to complete the withdrawal.
      * `Waiter-100k` waits up to `500ms` for `KSh 100,000`. Since the balance only reaches `KSh 30,000`, it times out and is rejected without overdrawing the account.
-
-## How to Compile and Run
-
-### Requirements
-
-* Java 17 or newer (needed for `record` and `List.of`).
-
-### Steps
-
-Open a terminal inside the `src` folder and run:
-
-```bash
-javac Main.java
-java Main
-```
-
-## Assignment Objectives Covered
-
-* Implemented `BankAccount` with deposit, withdrawal, transfer, and balance inquiry methods.
-* Executed all six customer transactions concurrently using separate threads.
-* Demonstrated a race condition first without synchronization.
-* Resolved concurrency issues using both `synchronized` blocks and `ReentrantLock`.
-* Implemented thread coordination (`Condition` with `awaitNanos` and `signalAll`) for waiting withdrawals.
-* Verified that accounts cannot be overdrawn, no money is lost during concurrent execution, all transactions are recorded, and final balances match the transaction ledger.
