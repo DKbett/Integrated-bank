@@ -9,6 +9,8 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import java.math.BigDecimal;
+import java.sql.SQLException;
 
 public class Main {
     static final long INITIAL = 100_000;
@@ -79,9 +81,20 @@ public class Main {
     }
 
     public static void main(String[] args) throws InterruptedException {
+        BankingRepository repo = new BankingRepository();
+        try {
+            repo.ensureAccount("MAIN-ACC", BigDecimal.valueOf(INITIAL));
+            repo.ensureAccount("OTHER-ACC", BigDecimal.ZERO);
+            repo.ensureAccount("WAIT-ACC", BigDecimal.valueOf(10_000));
+        } catch (SQLException e) {
+            System.out.println("DB init failed: " + e.getMessage());
+            return;
+        }
+
         boolean unsafeOk = runBankDay("SCENARIO 1: NO synchronization (race condition expected)", UnsafeAccount::new);
         boolean syncOk   = runBankDay("SCENARIO 2a: synchronized block", SynchronizedAccount::new);
-        boolean lockOk   = runBankDay("SCENARIO 2b: ReentrantLock", LockedAccount::new);
+        boolean lockOk   = runBankDay("SCENARIO 2b: ReentrantLock + MySQL persistence",
+                (id, opening) -> new LockedAccount(id, opening, repo));
         runCoordinationDemo();
 
         banner("SUMMARY");
@@ -121,13 +134,19 @@ abstract class BankAccount {
 
     private final String id;
     private final long openingBalance;
+    private final BankingRepository repository;                   // null when running in-memory only
     private long balance;                                         // the shared mutable state
     private final Queue<Transaction> ledger = new ConcurrentLinkedQueue<>(); // thread-safe audit log
 
     protected BankAccount(String id, long openingBalance) {
+        this(id, openingBalance, null);
+    }
+
+    protected BankAccount(String id, long openingBalance, BankingRepository repository) {
         this.id = id;
         this.openingBalance = openingBalance;
         this.balance = openingBalance;
+        this.repository = repository;
     }
 
     /** Runs the action under this account's concurrency strategy. */
@@ -149,6 +168,7 @@ abstract class BankAccount {
     public long getBalance() {
         return guarded(() -> {
             record(Type.BALANCE_INQUIRY, 0, true, balance);
+            persistState(Type.BALANCE_INQUIRY, 0, true, balance);
             return balance;
         });
     }
@@ -163,8 +183,26 @@ abstract class BankAccount {
             long updated = ok ? current + type.sign * amount : current;
             balance = updated;                                   // 3. write
             record(type, amount, ok, updated);
+            persistState(type, amount, ok, updated);
             return ok;
         });
+    }
+
+    private void persistState(Type type, long amount, boolean ok, long balanceAfter) {
+        if (repository == null) return;
+        try {
+            repository.saveBalanceAndTransaction(
+                    id,
+                    BigDecimal.valueOf(balanceAfter),
+                    type.name(),
+                    BigDecimal.valueOf(amount),
+                    ok,
+                    BigDecimal.valueOf(balanceAfter),
+                    Thread.currentThread().getName()
+            );
+        } catch (SQLException e) {
+            System.out.println("  [JDBC] Failed to persist " + id + ": " + e.getMessage());
+        }
     }
 
     private void record(Type type, long amount, boolean ok, long balanceAfter) {
@@ -203,26 +241,24 @@ abstract class BankAccount {
 /** (d) NO protection: demonstrates lost updates and overdrafts. */
 class UnsafeAccount extends BankAccount {
     UnsafeAccount(String id, long opening) { super(id, opening); }
+    UnsafeAccount(String id, long opening, BankingRepository repo) { super(id, opening, repo); }
     @Override protected <T> T guarded(Supplier<T> action) { return action.get(); }
 }
 
-/** (e-1) Intrinsic monitor via a synchronized block. */
 class SynchronizedAccount extends BankAccount {
     SynchronizedAccount(String id, long opening) { super(id, opening); }
+    SynchronizedAccount(String id, long opening, BankingRepository repo) { super(id, opening, repo); }
     @Override protected <T> T guarded(Supplier<T> action) {
         synchronized (this) { return action.get(); }
     }
 }
 
-/**
- * (e-2) ReentrantLock + Condition. The Condition provides thread coordination:
- * a withdrawal can WAIT (bounded) for a deposit instead of failing immediately.
- */
 class LockedAccount extends BankAccount {
     private final ReentrantLock lock = new ReentrantLock(true);   // fair lock
     private final Condition fundsAvailable = lock.newCondition();
 
     LockedAccount(String id, long opening) { super(id, opening); }
+    LockedAccount(String id, long opening, BankingRepository repo) { super(id, opening, repo); }
 
     @Override protected <T> T guarded(Supplier<T> action) {
         lock.lock();
